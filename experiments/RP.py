@@ -53,7 +53,7 @@ class ImportanceSelect(BaseEstimator, TransformerMixin):
 class RPExperiment(experiments.BaseExperiment):
 
     def __init__(self, details, verbose=False):
-        super().__init__(details)
+        super(RPExperiment, self).__init__(details)
         self._verbose = verbose
         self._nn_arch = [(50, 50), (50,), (25,), (25, 25), (100, 25, 100)]
         self._nn_reg = [10 ** -x for x in range(1, 5)]

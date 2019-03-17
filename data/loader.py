@@ -1,353 +1,214 @@
-import os
-import json
-
+import copy
+import logging
 import pandas as pd
-import requests
-from sklearn.model_selection import train_test_split
+import numpy as np
 
-# We have to do some import magic for this to work on a Mac
-# https://github.com/MTG/sms-tools/issues/36
-from sys import platform as sys_pf
+from collections import Counter
 
-if sys_pf == 'darwin':
-    import matplotlib
+from sklearn import preprocessing, utils
+import sklearn.model_selection as ms
+from scipy.sparse import isspmatrix
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
-    matplotlib.use("TkAgg")
-    import matplotlib.pyplot as plt
-else:
-    import matplotlib.pyplot as plt
-
+import os
 import seaborn as sns
 
-plt.tight_layout()
+from abc import ABC, abstractmethod
 
-RUN_PATH = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-DATA_PATH = r'./'
+from original_loader import CensusDataLoader, WineDataLoader
 
-CENSUS_CSV_FILE_NAME = "raw_census_data.csv"
-CENSUS_DATA_URL = "https://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.data"
-CENSUS_DATA_COLUMNS = [
-    'age', 'workclass', 'fnwgt',
-    'education', 'education-num',
-    'marital-status', 'occupation', 'relationship',
-    'race', 'sex', 'capital-gain',
-    'capital-loss', 'hours-per-week',
-    'native-country', 'income'
-]
+# TODO: Move this to a common lib?
+OUTPUT_DIRECTORY = './output'
 
-WINE_CSV_FILE_NAME = "winequality-red.csv"
+if not os.path.exists(OUTPUT_DIRECTORY):
+    os.makedirs(OUTPUT_DIRECTORY)
+if not os.path.exists('{}/images'.format(OUTPUT_DIRECTORY)):
+    os.makedirs('{}/images'.format(OUTPUT_DIRECTORY))
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
-def download_census_data_and_save_as_csv():
-    if CENSUS_CSV_FILE_NAME in os.listdir(DATA_PATH):
-        raise Exception("File already exists")
-
-    with open(os.path.join(DATA_PATH, CENSUS_CSV_FILE_NAME), "w") as raw_census_data:
-        raw_census_data.write(','.join(CENSUS_DATA_COLUMNS) + '\n')
-        raw_census_data.writelines(
-            requests.get(CENSUS_DATA_URL).text
-        )
+def plot_pairplot(title, df, class_column_name=None):
+    plt = sns.pairplot(df, hue=class_column_name)
+    return plt
 
 
-def output_graphs(df, output_dir='', columns=[], gtype='hist'):
-    for column in columns:
-        if gtype == 'hist':
-            values = df[column]
-        elif gtype == 'bar':
-            values = df[column].value_counts()
+# Adapted from https://stats.stackexchange.com/questions/239973/a-general-measure-of-data-set-imbalance
+def is_balanced(seq):
+    n = len(seq)
+    classes = [(clas, float(count)) for clas, count in Counter(seq).items()]
+    k = len(classes)
+
+    H = -sum([(count/n) * np.log((count/n)) for clas, count in classes])
+    return H/np.log(k) > 0.75
+
+
+class DataLoader(ABC):
+    def __init__(self, path, verbose, seed):
+        self._path = path
+        self._verbose = verbose
+        self._seed = seed
+
+        self.features = None
+        self.classes = None
+        self.testing_x = None
+        self.testing_y = None
+        self.training_x = None
+        self.training_y = None
+        self.binary = False
+        self.balanced = False
+        self._data = pd.DataFrame()
+
+    def load_and_process(self, data=None, preprocess=True):
+        """
+        Load data from the given path and perform any initial processing required. This will populate the
+        features and classes and should be called before any processing is done.
+        :return: Nothing
+        """
+        if data is not None:
+            self._data = data
+            self.features = None
+            self.classes = None
+            self.testing_x = None
+            self.testing_y = None
+            self.training_x = None
+            self.training_y = None
         else:
-            raise Exception('Unsupported gtype')
-        values.plot(kind=gtype, title=column.upper())
-        plt.savefig(os.path.join(output_dir, '%s_histogram.png' % column), bbox_inches="tight")
-        plt.close()
+            self._load_data()
+        self.log("Processing {} Path: {}, Dimensions: {}", self.data_name(), self._path, self._data.shape)
+        if self._verbose:
+            old_max_rows = pd.options.display.max_rows
+            pd.options.display.max_rows = 10
+            self.log("Data Sample:\n{}", self._data)
+            pd.options.display.max_rows = old_max_rows
 
+        if preprocess:
+            self.log("Will pre-process data")
+            self._preprocess_data()
 
-def plot_heatmap(df, columns, output_dir='', file_name='', title=''):
-    sns.heatmap(
-        df[columns].corr(),
-        annot=True,
-        fmt='.2f',
-    )
-    plt.title(title)
-    plt.savefig(os.path.join(output_dir, file_name), bbox_inches="tight")
-    plt.close()
+        self.get_features()
+        self.get_classes()
+        self.log("Feature dimensions: {}", self.features.shape)
+        self.log("Classes dimensions: {}", self.classes.shape)
+        self.log("Class values: {}", np.unique(self.classes))
+        class_dist = np.histogram(self.classes)[0]
+        class_dist = class_dist[np.nonzero(class_dist)]
+        self.log("Class distribution: {}", class_dist)
+        self.log("Class distribution (%): {}", (class_dist / self.classes.shape[0]) * 100)
+        self.log("Sparse? {}", isspmatrix(self.features))
 
+        if len(class_dist) == 2:
+            self.binary = True
+        self.balanced = is_balanced(self.classes)
 
-class CensusDataLoader(object):
-    """
-    CensusDataLoader: a bespoke data pipeline for the Census data found at:
-    https://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.data
-    """
+        self.log("Binary? {}", self.binary)
+        self.log("Balanced? {}", self.balanced)
 
-    def __init__(self, df, pipeline=[]):
-        # TODO: consider making pipeline immutable
-        # TODO: consider writing finished data frame to file as csv for ease of replication.
+    def scale_standard(self):
+        self.features = StandardScaler().fit_transform(self.features)
+        if self.training_x is not None:
+            self.training_x = StandardScaler().fit_transform(self.training_x)
+
+        if self.testing_x is not None:
+            self.testing_x = StandardScaler().fit_transform(self.testing_x)
+
+    def build_train_test_split(self, test_size=0.3):
+        if not self.training_x and not self.training_y and not self.testing_x and not self.testing_y:
+            self.training_x, self.testing_x, self.training_y, self.testing_y = ms.train_test_split(
+                self.features, self.classes, test_size=test_size, random_state=self._seed, stratify=self.classes
+            )
+
+    def get_features(self, force=False):
+        if self.features is None or force:
+            self.log("Pulling features")
+            self.features = np.array(self._data.iloc[:, 0:-1])
+
+        return self.features
+
+    def get_classes(self, force=False):
+        if self.classes is None or force:
+            self.log("Pulling classes")
+            self.classes = np.array(self._data.iloc[:, -1])
+
+        return self.classes
+
+    def dump_test_train_val(self, test_size=0.2, random_state=123):
+        ds_train_x, ds_test_x, ds_train_y, ds_test_y = ms.train_test_split(self.features, self.classes,
+                                                                           test_size=test_size,
+                                                                           random_state=random_state,
+                                                                           stratify=self.classes)
+        pipe = Pipeline([('Scale', preprocessing.StandardScaler())])
+        train_x = pipe.fit_transform(ds_train_x, ds_train_y)
+        train_y = np.atleast_2d(ds_train_y).T
+        test_x = pipe.transform(ds_test_x)
+        test_y = np.atleast_2d(ds_test_y).T
+
+        train_x, validate_x, train_y, validate_y = ms.train_test_split(train_x, train_y,
+                                                                       test_size=test_size, random_state=random_state,
+                                                                       stratify=train_y)
+        test_y = pd.DataFrame(np.where(test_y == 0, -1, 1))
+        train_y = pd.DataFrame(np.where(train_y == 0, -1, 1))
+        validate_y = pd.DataFrame(np.where(validate_y == 0, -1, 1))
+
+        tst = pd.concat([pd.DataFrame(test_x), test_y], axis=1)
+        trg = pd.concat([pd.DataFrame(train_x), train_y], axis=1)
+        val = pd.concat([pd.DataFrame(validate_x), validate_y], axis=1)
+
+        tst.to_csv('data/{}_test.csv'.format(self.data_name()), index=False, header=False)
+        trg.to_csv('data/{}_train.csv'.format(self.data_name()), index=False, header=False)
+        val.to_csv('data/{}_validate.csv'.format(self.data_name()), index=False, header=False)
+
+    @abstractmethod
+    def _load_data(self):
+        pass
+
+    @abstractmethod
+    def data_name(self):
+        pass
+
+    @abstractmethod
+    def _preprocess_data(self):
+        pass
+
+    @abstractmethod
+    def class_column_name(self):
+        pass
+
+    @abstractmethod
+    def pre_training_adjustment(self, train_features, train_classes):
         """
-        NOTE: self.pipeline shouldn't need to change
-        since we are not building an API to run this pipeline.
-        However, if the pipeline needs to change,
-        a user can update the attribute with more functions
-        that take a data frame as input and return a data frame
-        as output.
-        Parameters:
-            df (pandas.DataFrame): data frame that will be operated on
-            pipeline (list): list containing functions that take in a pandas.DataFrame
-            and return an updated pandas.DataFrame. The updated df is used to update the
-            self.df.
-        Returns: void
+        Perform any adjustments to training data before training begins.
+        :param train_features: The training features to adjust
+        :param train_classes: The training classes to adjust
+        :return: The processed data
         """
-        self.df = df
-        if pipeline:
-            self.pipeline = pipeline
-        else:
-            self.pipeline = [
-                self.trim_strings,
-                self.drop_missing_values,
-                self.update_marital_status,
-                # self.create_category_num_columns,
-                self.add_from_united_states_column,
-                self.create_dummy_columns,
-                self.bucket_age_column,
-                self.add_income_num_column,
-            ]
+        return train_features, train_classes
 
-    def apply_pipeline(self):
+    def reload_from_hdf(self, hdf_path, hdf_ds_name, preprocess=True):
+        self.log("Reloading from HDF {}".format(hdf_path))
+        loader = copy.deepcopy(self)
+
+        df = pd.read_hdf(hdf_path, hdf_ds_name)
+        loader.load_and_process(data=df, preprocess=preprocess)
+        loader.build_train_test_split()
+
+        return loader
+
+    def log(self, msg, *args):
         """
-        Moves through the list of pipeline functions and applies.
-        This  assumes idempotent changes. Calling this multiple times
-        will result in wasteful ops, but does not change the df.
-        Returns:
-            self (pandas.DataFrame)
+        If the learner has verbose set to true, log the message with the given parameters using string.format
+        :param msg: The log message
+        :param args: The arguments
+        :return: None
         """
-        for fxn in self.pipeline:
-            self.df = fxn(self.df)
-        return self.df
-
-    @property
-    def df(self):
-        return self.__df
-
-    @df.setter
-    def df(self, value):
-        """
-        Consider adding checks for the columns here
-        to ensure the df has not mutated outside of the
-        initial or intended schema.
-        """
-        self.__df = value
-
-    @staticmethod
-    def trim_strings(df):
-        """
-        Trim each element if it is a string
-        operates against this data frame
-        Args:
-            df (pandas.DataFrame): input data frame. Assumes the data frame
-            is of the form of the data frame this CensusDataLoader was initialized.
-        Returns:
-            df (pandas.DataFrame)
-        """
-        return df.applymap(
-            lambda item: item.strip() if isinstance(item, str) else item)
-
-    @staticmethod
-    def drop_missing_values(df):
-        """
-        Drop missing values which are denoted by '?' in the data set.
-        Args:
-            df (pandas.DataFrame): input data frame. Assumes the data frame
-            is of the form of the data frame this CensusDataLoader was initialized.
-        Returns:
-            df (pandas.DataFrame)
-        """
-        df = df[df['workclass'] != '?']
-        df = df[df['occupation'] != '?']
-        df = df[df['native-country'] != '?']
-        return df
-
-    @staticmethod
-    def update_marital_status(df):
-        """
-        Reduce the marital-status column to either single or married for simplicity
-        Args:
-            df (pandas.DataFrame)
-        Returns:
-            df (pandas.DataFrame)
-        """
-        df['marital-status'] = df['marital-status'].replace(
-            ['Never-married', 'Divorced', 'Separated', 'Widowed'],
-            'Single'
-        )
-        df['marital-status'] = df['marital-status'].replace(
-            ['Married-civ-spouse', 'Married-spouse-absent', 'Married-AF-spouse'],
-            'Married'
-        )
-        return df
-
-    @staticmethod
-    def add_from_united_states_column(df):
-        """
-        Reduce native-country to from United States or not
-        Args:
-            df (pandas.DataFrame)
-        Returns:
-            df (pandas.DataFrame)
-        """
-        df['from_united_states'] = df['native-country'].apply(lambda country: 1 if country == 'United-States' else 0)
-        return df
-
-    @staticmethod
-    def create_category_num_columns(df):
-        """
-        Transform categorical (class) data into a numerical representation.
-        Args:
-            df (pandas.DataFrame): input data frame. Assumes the data frame
-            is of the form of the data frame this CensusDataLoader was initialized.
-        Returns:
-            df (pandas.DataFrame)
-        """
-        category_maps = {}
-        try:
-            with open(os.path.join(RUN_PATH, 'preprocessors/census_category_maps.json'), 'r') as input_categories:
-                category_maps = json.loads(input_categories.read())
-        except Exception:
-            category_maps = {
-                'workclass': {key: idx for idx, key in enumerate(set(df['workclass']))},
-                'marital-status': {key: idx for idx, key in enumerate(set(df['marital-status']))},
-                'occupation': {key: idx for idx, key in enumerate(set(df['occupation']))},
-                'relationship': {key: idx for idx, key in enumerate(set(df['relationship']))},
-                'race': {key: idx for idx, key in enumerate(set(df['race']))},
-                'sex': {key: idx for idx, key in enumerate(set(df['sex']))},
-                'native-country': {key: idx for idx, key in enumerate(set(df['native-country']))},
-                'income': {'<=50K': 0, '>50K': 1}
-            }
-
-        with open(os.path.join(RUN_PATH, 'preprocessors/census_category_maps.json'), 'w') as output_category_maps:
-            output_category_maps.write(json.dumps(category_maps, indent=4))
-
-        for col, category_map in category_maps.items():
-            df[col + '_num'] = df[col].map(category_map)
-        return df
-
-    @staticmethod
-    def create_dummy_columns(df):
-        """
-        Create dummy columns for categorical variables with many values that do not have an order
-        Args:
-            df (pandas.DataFrame)
-        Returns:
-            df (pandas.DataFrame)
-        """
-        df = df.join(pd.get_dummies(df[['workclass']], prefix='workclass', drop_first=True))
-        df = df.join(pd.get_dummies(df['marital-status'], prefix='marital-status', drop_first=True))
-        df = df.join(pd.get_dummies(df['occupation'], prefix='occupation', drop_first=True))
-        df = df.join(pd.get_dummies(df['relationship'], prefix='relationship', drop_first=True))
-        df = df.join(pd.get_dummies(df['race'], prefix='race', drop_first=True))
-        df = df.join(pd.get_dummies(df['sex'], prefix='sex', drop_first=True))
-        # df = df.join(pd.get_dummies(df['native-country'], prefix='native-country', drop_first=True))
-        return df
-
-    @staticmethod
-    def add_income_num_column(df):
-        df['income_num'] = df['income'].map({'<=50K': -1, '>50K': 1})
-        return df
-
-    @staticmethod
-    def bucket_age_column(df):
-        """
-        Buckets the age based on the CensusDataLoader._bucket_age_column_helper function.
-        Args:
-            df (pandas.DataFrame): input data frame
-        Returns:
-            df (pandas.DataFrame): updated data frame
-        """
-        df['age_num'] = df['age'].apply(
-            lambda age: CensusDataLoader._bucket_age_column_helper(age)
-        )
-        return df
-
-    @staticmethod
-    def _bucket_age_column_helper(row_age):
-        age_buckets = {
-            0: lambda age: age < 20,
-            1: lambda age: 20 <= age < 30,
-            2: lambda age: 30 <= age < 40,
-            3: lambda age: 40 <= age < 50,
-            4: lambda age: 50 <= age < 60,
-            5: lambda age: age >= 60
-        }
-        for age_num, evaluator in age_buckets.items():
-            if evaluator(row_age):
-                return age_num
-        raise Exception("No age mapped")
+        if self._verbose:
+            logger.info(msg.format(*args))
 
 
-class WineDataLoader(object):
-    """
-    A bespoke data pipeline operating on a pandas.DataFrame via a list of operations.
-    Data found at https://www.kaggle.com/uciml/red-wine-quality-cortez-et-al-2009/version/2
-    """
-
-    def __init__(self, df, pipeline=[]):
-        self.df = df
-        if pipeline:
-            self.pipeline = pipeline
-        else:
-            self.pipeline = [
-                self.dropna,
-                self.reclassify_quality_v2
-            ]
-
-    def apply_pipeline(self):
-        """
-        Moves through the list of pipeline functions and applies.
-        This  assumes idempotent changes. Calling this multiple times
-        will result in wasteful ops, but does not change the df.
-        Returns:
-            self (pandas.DataFrame)
-        """
-        for fxn in self.pipeline:
-            self.df = fxn(self.df)
-        try:
-            with open(os.path.join(RUN_PATH, 'preprocessors/wine_full_column_list.txt'), 'w') as column_list:
-                column_list.write('\n'.join(self.df.columns))
-        except Exception as e:
-            print('Exception writing census columns to file during preprocessing with error %s' % e)
-        return self.df
-
-    @property
-    def df(self):
-        return self.__df
-
-    @df.setter
-    def df(self, value):
-        """
-        Consider adding checks for the columns here
-        to ensure the df has not mutated outside of the
-        initial or intended schema.
-        """
-        self.__df = value
-
-    @staticmethod
-    def dropna(df):
-        return df.dropna()
-
-    @staticmethod
-    def reclassify_quality(df):
-        bins = (2, 6.5, 8)
-        group_names = ['Low Quality', 'High Quality']
-        df['quality_num'] = pd.cut(df['quality'], bins=bins, labels=group_names)
-        return df
-
-    @staticmethod
-    def reclassify_quality_v2(df):
-        df['quality_num'] = df['quality'].map(lambda val: 0 if val < 6.5 else 1)
-        return df
-
-
-if __name__ == '__main__':
-    # print(DATA_PATH)
-    # download_census_data_and_save_as_csv()
+class CensusData(DataLoader):
 
     feature_cols = ['age_num', 'education-num', 'marital-status_Single',
                     'hours-per-week', 'capital-gain',
@@ -355,30 +216,58 @@ if __name__ == '__main__':
 
     target = 'income_num'
 
-    census_df = pd.read_csv(os.path.join(DATA_PATH, CENSUS_CSV_FILE_NAME))
-    data_loader = CensusDataLoader(census_df)
+    def __init__(self, path='data/raw_census_data.csv', verbose=False, seed=0):
+        super(CensusData, self).__init__(path, verbose, seed)
 
-    loaded_data = data_loader.apply_pipeline()
+    def _load_data(self):
+        data_loader = CensusDataLoader(pd.read_csv(self._path))
+        loaded_data = data_loader.apply_pipeline()
+        cols = self.feature_cols + [self.target]
+        self._data = loaded_data[cols]
 
-    # TODO: Consider stratification
-    x_train, x_test, y_train, y_test = train_test_split(
-        loaded_data[feature_cols],
-        loaded_data[target],
-        random_state=0,
-        test_size=0.2
-    )
+    def data_name(self):
+        return 'CensusData'
 
-    x_train, x_validate, y_train, y_validate = train_test_split(
-        x_train,
-        y_train,
-        random_state=0,
-        test_size=0.5
-    )
+    def class_column_name(self):
+        return 'income_num'
 
-    test_set = pd.concat([x_test, y_test], axis=1)
-    train_set = pd.concat([x_train, y_train], axis=1)
-    validate_set = pd.concat([x_validate, y_validate], axis=1)
+    def _preprocess_data(self):
+        pass
 
-    test_set.to_csv('./{}_test.csv'.format('census'), index=False, header=False)
-    train_set.to_csv('./{}_train.csv'.format('census'), index=False, header=False)
-    validate_set.to_csv('./{}_validate.csv'.format('census'), index=False, header=False)
+    def pre_training_adjustment(self, train_features, train_classes):
+        """
+        Perform any adjustments to training data before training begins.
+        :param train_features: The training features to adjust
+        :param train_classes: The training classes to adjust
+        :return: The processed data
+        """
+        return train_features, train_classes
+
+
+class WineData(DataLoader):
+
+    def __init__(self, path='data/winequality-red', verbose=False, seed=0):
+        super(WineData, self).__init__(path, verbose, seed)
+
+    def _load_data(self):
+        data_loader = WineDataLoader(pd.read_csv(self._path))
+        loaded_data = data_loader.apply_pipeline()
+        self._data = loaded_data
+
+    def data_name(self):
+        return 'WineData'
+
+    def class_column_name(self):
+        return 'income_num'
+
+    def _preprocess_data(self):
+        pass
+
+    def pre_training_adjustment(self, train_features, train_classes):
+        """
+        Perform any adjustments to training data before training begins.
+        :param train_features: The training features to adjust
+        :param train_classes: The training classes to adjust
+        :return: The processed data
+        """
+        return train_features, train_classes
