@@ -359,26 +359,27 @@ if __name__ == '__main__':
     data_loader = CensusDataLoader(census_df)
 
     loaded_data = data_loader.apply_pipeline()
+    print(loaded_data.columns)
 
     # TODO: Consider stratification
-    x_train, x_test, y_train, y_test = train_test_split(
-        loaded_data[feature_cols],
-        loaded_data[target],
-        random_state=0,
-        test_size=0.2
-    )
-
-    x_train, x_validate, y_train, y_validate = train_test_split(
-        x_train,
-        y_train,
-        random_state=0,
-        test_size=0.5
-    )
-
-    test_set = pd.concat([x_test, y_test], axis=1)
-    train_set = pd.concat([x_train, y_train], axis=1)
-    validate_set = pd.concat([x_validate, y_validate], axis=1)
-
-    test_set.to_csv('./{}_test.csv'.format('census'), index=False, header=False)
-    train_set.to_csv('./{}_train.csv'.format('census'), index=False, header=False)
-    validate_set.to_csv('./{}_validate.csv'.format('census'), index=False, header=False)
+    # x_train, x_test, y_train, y_test = train_test_split(
+    #     loaded_data[feature_cols],
+    #     loaded_data[target],
+    #     random_state=0,
+    #     test_size=0.2
+    # )
+    #
+    # x_train, x_validate, y_train, y_validate = train_test_split(
+    #     x_train,
+    #     y_train,
+    #     random_state=0,
+    #     test_size=0.5
+    # )
+    #
+    # test_set = pd.concat([x_test, y_test], axis=1)
+    # train_set = pd.concat([x_train, y_train], axis=1)
+    # validate_set = pd.concat([x_validate, y_validate], axis=1)
+    #
+    # test_set.to_csv('./{}_test.csv'.format('census'), index=False, header=False)
+    # train_set.to_csv('./{}_train.csv'.format('census'), index=False, header=False)
+    # validate_set.to_csv('./{}_validate.csv'.format('census'), index=False, header=False)

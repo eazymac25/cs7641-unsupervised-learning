@@ -214,6 +214,23 @@ class CensusData(DataLoader):
                     'hours-per-week', 'capital-gain',
                     'capital-loss', 'sex_Male', 'from_united_states']
 
+    all_cols = ['age', 'education-num', 'capital-gain',
+                'capital-loss', 'hours-per-week', 'from_united_states', 'workclass_Local-gov',
+                'workclass_Private', 'workclass_Self-emp-inc',
+                'workclass_Self-emp-not-inc', 'workclass_State-gov',
+                'workclass_Without-pay', 'marital-status_Single',
+                'occupation_Armed-Forces', 'occupation_Craft-repair',
+                'occupation_Exec-managerial', 'occupation_Farming-fishing',
+                'occupation_Handlers-cleaners', 'occupation_Machine-op-inspct',
+                'occupation_Other-service', 'occupation_Priv-house-serv',
+                'occupation_Prof-specialty', 'occupation_Protective-serv',
+                'occupation_Sales', 'occupation_Tech-support',
+                'occupation_Transport-moving', 'relationship_Not-in-family',
+                'relationship_Other-relative', 'relationship_Own-child',
+                'relationship_Unmarried', 'relationship_Wife',
+                'race_Asian-Pac-Islander', 'race_Black', 'race_Other', 'race_White',
+                'sex_Male', ]
+
     target = 'income_num'
 
     def __init__(self, path='data/raw_census_data.csv', verbose=False, seed=0):
