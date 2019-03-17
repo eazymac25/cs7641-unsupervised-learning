@@ -12,9 +12,9 @@ class BenchmarkExperiment(experiments.BaseExperiment):
     def __init__(self, details, verbose=False):
         super().__init__(details)
         self._verbose = verbose
-        self._nn_arch = [(50, 50), (50,), (25,), (25, 25), (100, 25, 100)]
-        self._nn_reg = [10 ** -x for x in range(1, 5)]
-        self._clusters = [2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30, 35, 40]
+        self._nn_arch = [(200,), (100,), (50,), (20, 20), (20, 5)]
+        self._nn_reg = [10 ** -x for x in range(1, 7)]
+        self._clusters = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 
     def experiment_name(self):
         return 'benchmark'
@@ -25,7 +25,7 @@ class BenchmarkExperiment(experiments.BaseExperiment):
 
         # %% benchmarking for chart type 2
         grid = {'NN__alpha': self._nn_reg, 'NN__hidden_layer_sizes': self._nn_arch}
-        mlp = MLPClassifier(activation='relu', max_iter=2000, early_stopping=True, random_state=self._details.seed)
+        mlp = MLPClassifier(activation='logistic', max_iter=2000, early_stopping=True, random_state=self._details.seed)
         pipe = Pipeline([('NN', mlp)], memory=experiments.pipeline_memory)
         gs, _ = self.gs_with_best_estimator(pipe, grid)
         self.log("Grid search complete")
@@ -35,7 +35,7 @@ class BenchmarkExperiment(experiments.BaseExperiment):
         self.log("Done")
 
         # benchmark based on best params from assignment 1
-        mlp = MLPClassifier(activation='relu', max_iter=2000, early_stopping=True, random_state=self._details.seed)
+        mlp = MLPClassifier(activation='logistic', max_iter=2000, early_stopping=True, random_state=self._details.seed)
         pipe = Pipeline([('NN', mlp)], memory=experiments.pipeline_memory)
         gs, _ = self.gs_with_best_estimator(pipe, self._details.best_nn_params, type='ass1')
 

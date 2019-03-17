@@ -249,7 +249,7 @@ class CensusDataLoader(object):
 
     @staticmethod
     def add_income_num_column(df):
-        df['income_num'] = df['income'].map({'<=50K': -1, '>50K': 1})
+        df['income_num'] = df['income'].map({'<=50K': 0, '>50K': 1})
         return df
 
     @staticmethod
