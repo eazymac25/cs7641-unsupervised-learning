@@ -57,8 +57,8 @@ class RPExperiment(experiments.BaseExperiment):
         self._verbose = verbose
         self._nn_arch = [(200,), (100,), (50,), (20, 20), (20, 5)]
         self._nn_reg = [10 ** -x for x in range(1, 7)]
-        self._clusters = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
-        self._dims = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        self._clusters = [2, 3, 4, 5, 6, 7, 8]
+        self._dims = [2, 3, 4, 5, 6, 7, 8]
 
     def experiment_name(self):
         return 'RP'
