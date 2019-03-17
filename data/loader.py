@@ -16,7 +16,7 @@ import seaborn as sns
 
 from abc import ABC, abstractmethod
 
-from original_loader import CensusDataLoader, WineDataLoader
+from data.original_loader import CensusDataLoader, WineDataLoader
 
 # TODO: Move this to a common lib?
 OUTPUT_DIRECTORY = './output'
@@ -246,7 +246,7 @@ class CensusData(DataLoader):
 
 class WineData(DataLoader):
 
-    def __init__(self, path='data/winequality-red', verbose=False, seed=0):
+    def __init__(self, path='data/winequality-red.csv', verbose=False, seed=0):
         super(WineData, self).__init__(path, verbose, seed)
 
     def _load_data(self):
@@ -258,7 +258,7 @@ class WineData(DataLoader):
         return 'WineData'
 
     def class_column_name(self):
-        return 'income_num'
+        return 'quality_num'
 
     def _preprocess_data(self):
         pass
