@@ -92,14 +92,14 @@ if __name__ == '__main__':
             'name': 'census',
             'readable_name': 'Census',
             'best_nn_params': {'NN__activation': ['logistic'], 'NN__alpha': [1e-6],
-                               'NN__hidden_layer_sizes': [(100,)], 'NN__learning_rate_init': [0.016]}
+                               'NN__hidden_layer_sizes': [(20, 20)], 'NN__learning_rate_init': [0.001]}
         }
     dataset2_details = {
             'data': loader.WineData(verbose=verbose, seed=seed),
             'name': 'wine',
             'readable_name': 'Wine',
-            'best_nn_params': {'NN__activation': ['logistic'], 'NN__alpha': [1],
-                               'NN__hidden_layer_sizes': [(200,)], 'NN__learning_rate_init': [0.016]}
+            'best_nn_params': {'NN__activation': ['logistic'], 'NN__alpha': [.001],
+                               'NN__hidden_layer_sizes': [(20, 20)], 'NN__learning_rate_init': [0.001]}
     }
     if args.dataset1:
         datasets.append(dataset1_details)
