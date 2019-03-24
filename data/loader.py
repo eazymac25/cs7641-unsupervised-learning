@@ -263,13 +263,16 @@ class CensusData(DataLoader):
 
 class WineData(DataLoader):
 
+    feature_cols = ['fixed acidity', 'volatile acidity', 'citric acid', 'residual sugar', 'chlorides',
+                    'free sulfur dioxide', 'total sulfur dioxide', 'density', 'pH', 'sulphates', 'alcohol']
+
     def __init__(self, path='data/winequality-red.csv', verbose=False, seed=0):
         super(WineData, self).__init__(path, verbose, seed)
 
     def _load_data(self):
         data_loader = WineDataLoader(pd.read_csv(self._path))
         loaded_data = data_loader.apply_pipeline()
-        self._data = loaded_data
+        self._data = loaded_data[self.feature_cols + ['quality_num']]
 
     def data_name(self):
         return 'WineData'
