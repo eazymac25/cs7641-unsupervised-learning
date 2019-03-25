@@ -51,7 +51,7 @@ pip install -r requirements.txt
     |-- RP.py
     |-- other unused files
 |-- output
-    |-- PCA 
+    |-- PCA
     |-- ICA
     |-- benchmark
     |-- RP
